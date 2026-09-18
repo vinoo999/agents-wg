@@ -27,7 +27,7 @@ While there are a lot of potential problems (and solutions) to navigate steering
 
 ### Examples
 
-Consider two tools, one non-agentic tool and one agentic tool.
+Consider three cases: a non-agentic tool, an agentic tool, and a pair of tools in one toolset.
 
 **`run_ci(repo, ref, testFilter?)`.** A client calls a continuous integration tool that runs tests with labels with no filter, so the server begins the full matrix and returns a task. Ten minutes in, the client decides it only needs one package's tests. It cancels and calls `run_ci` again with a `testFilter`.
 
@@ -37,9 +37,27 @@ By that point the server may have performed operations like cloning the reposito
 
 The agent's accumulated context, the LLM + tool calls already made, are discarded. The server may well still hold that state. The client cannot say the second query continues the first.
 
+**`get_ci_logs(tail?)` next to `run_ci`.** The CI task is still `working`, and when it finishes its result will be a pass/fail verdict. The client wants the log lines produced so far, which the verdict will never carry. The same server exposes a second tool that reads the current state of a run, and the client names the running task on the call:
+
+```json
+{
+  "name": "get_ci_logs",
+  "arguments": { "tail": 200 },
+  "_meta": {
+    "io.modelcontextprotocol/relatedTaskIds": ["task_1234"]
+  }
+}
+```
+
+The server resolves `task_1234`, reads the log buffer it already holds, and returns it as an ordinary `CallToolResult`. `task_1234` is untouched: it keeps running, its status does not change, and its eventual result is the same verdict it was always going to produce.
+
+This is intermediary results without a streaming channel and without any change to the task lifecycle. The read is a normal tool call that happens to be scoped to a task the client names, so the server decides what is worth exposing mid-flight and advertises it as a tool like any other. It does not replace a general intermediary-results mechanism, and it only works where the server chose to offer the reader tool, but it is reachable with the key alone.
+
 ### Relationship to steering
 
 The Agents WG is scoping steering, defined in [agents-wg#27](https://github.com/modelcontextprotocol/agents-wg/issues/27) as input delivered to an ongoing task that may change what it does next. Several of the motivating cases there are where the client already knows what it wants and only needs the server to not start over.
+
+Two of the cases above stand on their own even if steering is never specified: cancel-and-retry that does not throw away server-held state, and reading the current state of a running task through a sibling tool. Neither delivers input into a running task, and both leave the task lifecycle exactly as specified today. Both do require a host that knows which task the new call relates to, since the host, not the model, populates the key. That is the same bookkeeping a host already does to poll or cancel a task it created.
 
 Steering in its totality is contentious. It requires deciding where the input is carried, what the server is obliged to do with it, how it interleaves with output already in flight, and whether it belongs in the elicitation machinery. Those questions will take time.
 
